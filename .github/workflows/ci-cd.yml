@@ -1,0 +1,86 @@
+name: Socialflyn CI/CD
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: socialflyn_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - run: npm ci
+      
+      - name: Lint
+        run: npm run lint --workspaces
+      
+      - name: Build
+        run: npm run build --workspaces
+      
+      - name: Test Backend
+        run: npm run test --workspace=apps/backend
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/socialflyn_test
+
+  build-docker:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: docker/setup-buildx-action@v2
+      
+      - name: Build Backend Image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./apps/backend
+          push: false
+          tags: socialflyn-api:${{ github.sha }}
+
+      - name: Build Frontend Image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./apps/frontend
+          push: false
+          tags: socialflyn-web:${{ github.sha }}
+
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    needs: build-docker
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy to production
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          echo "Deploying to production..."
+          # Add your deployment script here

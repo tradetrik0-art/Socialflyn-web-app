@@ -1,0 +1,389 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============ Auth & Users ============
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String
+  role      Role     @default(CLIENT)
+  
+  // Relations
+  tenant    Tenant?  @relation("TenantOwner", fields: [tenantId], references: [id], onDelete: SetNull)
+  tenantId  String?
+  
+  client    Client?  @relation("ClientUser", fields: [clientId], references: [id], onDelete: SetNull)
+  clientId  String?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lastLogin DateTime?
+
+  // Audit log
+  auditLogs AuditLog[]
+
+  @@index([tenantId])
+  @@index([clientId])
+  @@index([email])
+}
+
+enum Role {
+  ADMIN
+  CLIENT
+  REVIEWER
+  AGENCY_OWNER
+}
+
+// ============ Multi-tenancy ============
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  owner     User?    @relation("TenantOwner")
+  
+  // Settings
+  settings  Json     @default("{}")
+  
+  // Relations
+  clients   Client[]
+  sequences OutreachSequence[]
+  usageCredits UsageCredit[]
+  invoices  BillingInvoice[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([slug])
+}
+
+// ============ Client Management ============
+model Client {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  name      String
+  industry  String
+  platforms Json     // ["instagram", "facebook", "linkedin"]
+  monthlyBudget Float
+  
+  // Billing
+  packageType PackageType @default(SOCIAL_MEDIA_MANAGEMENT)
+  billingInfo String?
+  
+  // Status
+  status    ClientStatus @default(ACTIVE)
+  
+  // Relations
+  user      User?    @relation("ClientUser")
+  posts     Post[]
+  creativeJobs CreativeJob[]
+  adAccounts AdAccount[]
+  leads     AutomationLead[]
+  aiPlans   AIPlan[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@index([status])
+}
+
+enum ClientStatus {
+  ONBOARDING
+  ACTIVE
+  PAUSED
+  CANCELED
+}
+
+enum PackageType {
+  SOCIAL_MEDIA_MANAGEMENT
+  SMO_ADS
+  CUSTOM_ALL_IN_ONE
+}
+
+// ============ AI Planning ============
+model AIPlan {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  
+  planType  PlanType @default(THIRTY_SIXTY_NINETY)
+  content   Json     // { tactics: [], milestones: [], expected_outcomes: {} }
+  metricsTargets Json // { reach: 10000, engagement_rate: 5 }
+  
+  generatedAt DateTime @default(now())
+  status    String   @default("draft")
+  
+  @@index([clientId])
+}
+
+enum PlanType {
+  THIRTY_SIXTY_NINETY
+  QUARTERLY
+  CUSTOM
+}
+
+// ============ Content & Posts ============
+model Post {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  
+  title     String?
+  caption   String
+  hashtags  String   // comma-separated
+  creativeUrl String?
+  creativeJob CreativeJob? @relation("PostCreative")
+  
+  status    PostStatus @default(DRAFT)
+  scheduledAt DateTime?
+  publishedAt DateTime?
+  
+  // Engagement metrics
+  likes     Int       @default(0)
+  comments  Int       @default(0)
+  shares    Int       @default(0)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy String?
+
+  @@index([clientId])
+  @@index([status])
+  @@index([scheduledAt])
+}
+
+enum PostStatus {
+  DRAFT
+  QUEUED
+  APPROVED
+  PUBLISHED
+  FAILED
+}
+
+model CreativeJob {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  
+  post      Post?    @relation("PostCreative", fields: [postId], references: [id])
+  postId    String?  @unique
+  
+  prompt    String
+  engine    CreativeEngine @default(STABLE_DIFFUSION)
+  assetUrl  String?
+  
+  status    CreativeJobStatus @default(PENDING)
+  costEstimate Float @default(0)
+  
+  createdAt DateTime @default(now())
+  completedAt DateTime?
+
+  @@index([clientId])
+  @@index([status])
+}
+
+enum CreativeEngine {
+  STABLE_DIFFUSION
+  MIDJOURNEY
+  DALLE3
+  REPLICATE
+}
+
+enum CreativeJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ============ Ad Accounts & Campaigns ============
+model AdAccount {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  
+  provider  AdProvider
+  accountId String    // Meta Ad Account ID or Google Customer ID
+  credentialsEncrypted String // encrypted OAuth token
+  
+  status    String   @default("connected")
+  lastSync  DateTime?
+  
+  campaigns AdCampaign[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([clientId, provider])
+  @@index([clientId])
+}
+
+enum AdProvider {
+  META
+  GOOGLE
+  TIKTOK
+}
+
+model AdCampaign {
+  id        String   @id @default(cuid())
+  adAccountId String
+  adAccount AdAccount @relation(fields: [adAccountId], references: [id], onDelete: Cascade)
+  
+  name      String
+  budget    Float
+  status    String   @default("active")
+  
+  // Metrics snapshot
+  metricsSnapshot Json // { impressions, clicks, spend, conversions, ctr, cpc, roas }
+  lastFetched DateTime?
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([adAccountId])
+  @@index([status])
+}
+
+// ============ Automation & Outreach ============
+model AutomationLead {
+  id        String   @id @default(cuid())
+  clientId  String
+  client    Client   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  
+  source    LeadSource
+  data      Json     // { name, email, phone, company, industry }
+  
+  sequenceState Json // { last_email_day: 1, last_whatsapp_day: 1, status: "pending" }
+  lastContacted DateTime?
+  status    LeadStatus @default(NEW)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([clientId])
+  @@index([status])
+}
+
+enum LeadSource {
+  FORM_SUBMISSION
+  LEAD_MAGNET
+  CSV_UPLOAD
+  MANUAL
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  ENGAGED
+  CONVERTED
+  UNRESPONSIVE
+}
+
+model OutreachSequence {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  name      String
+  channel   OutreachChannel
+  templates Json     // { day1, day3, day7 }
+  followupSchedule Json // { day3_delay: 72, day7_delay: 168 }
+  
+  isActive  Boolean  @default(true)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId])
+}
+
+enum OutreachChannel {
+  EMAIL
+  WHATSAPP
+  SMS
+}
+
+// ============ Billing & Usage ============
+model UsageCredit {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  feature   UsageFeature
+  quota     Int
+  used      Int       @default(0)
+  
+  periodStart DateTime
+  periodEnd DateTime
+  
+  @@unique([tenantId, feature, periodStart])
+  @@index([tenantId])
+}
+
+enum UsageFeature {
+  AI_CONTENT_GENERATION
+  AI_IMAGE_GENERATION
+  AI_VIDEO_GENERATION
+  EMAIL_SENDS
+  WHATSAPP_SENDS
+  AD_ACCOUNT_CONNECTIONS
+}
+
+model BillingInvoice {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  
+  amount    Float
+  period    String   // "2024-01"
+  status    InvoiceStatus @default(DRAFT)
+  
+  items     Json     // line items
+  
+  createdAt DateTime @default(now())
+  paidAt    DateTime?
+
+  @@unique([tenantId, period])
+  @@index([tenantId])
+  @@index([status])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  FAILED
+  CANCELED
+}
+
+// ============ Audit & Compliance ============
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  
+  action    String
+  resourceType String
+  resourceId String
+  detail    Json
+  
+  createdAt DateTime @default(now())
+
+  @@index([actorId])
+  @@index([resourceType])
+  @@index([resourceId])
+  @@index([createdAt])
+}
