@@ -16,7 +16,7 @@
     "next": "^14.0.0",
     "next-auth": "^4.24.0",
     "axios": "^1.6.0",
-    "zustand": "^4.4.0",
+    "zustand": "^4.5.2",
     "react-hook-form": "^7.48.0",
     "react-query": "^3.39.0",
     "@tanstack/react-query": "^5.28.0",
